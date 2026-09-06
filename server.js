@@ -20,52 +20,176 @@ function code() {
   do { value = Array.from({length: 5}, () => chars[randomInt(chars.length)]).join(''); } while (rooms.has(value));
   return value;
 }
+
 function publicRoom(room) {
-  return { code: room.code, phase: room.phase, players: room.players.map(({id,...p}) => p), voteOptions: room.voteOptions };
+  return {
+    code: room.code,
+    phase: room.phase,
+    players: room.players.map(({id,...p}) => p),
+    voteOptions: room.voteOptions,
+    selectedGame: room.selectedGame,
+    game: room.game ? {
+      name: room.game.name,
+      status: room.game.status,
+      startsAt: room.game.startsAt,
+      revealUntil: room.game.revealUntil,
+      stoppedCount: room.game.stops.size,
+      results: room.game.results || []
+    } : null
+  };
 }
+
 function emitRoom(room) { io.to(room.code).emit('room:update', publicRoom(room)); }
 function findPlayer(room, socketId) { return room.players.find(p => p.id === socketId); }
+
+function finishTen(room) {
+  if (!room.game || room.game.name !== 'Stoppa på 10.00' || room.game.status === 'results') return;
+  if (room.game.finishTimer) clearTimeout(room.game.finishTimer);
+
+  const results = room.players.map(player => {
+    const elapsed = room.game.stops.get(player.id);
+    const validElapsed = elapsed ?? 15000;
+    const diff = Math.abs(validElapsed - 10000);
+    const points = Math.max(0, Math.round(1000 - diff * 0.2));
+    player.score += points;
+    return { name: player.name, color: player.color, elapsed: validElapsed, diff, points };
+  }).sort((a,b) => a.diff - b.diff);
+
+  room.game.status = 'results';
+  room.game.results = results;
+  room.phase = 'results';
+  emitRoom(room);
+}
+
+function startTen(room) {
+  if (!room || !room.players.length) return false;
+  const now = Date.now();
+  room.selectedGame = 'Stoppa på 10.00';
+  room.phase = 'game';
+  room.game = {
+    name: 'Stoppa på 10.00',
+    status: 'countdown',
+    startsAt: now + 3500,
+    revealUntil: now + 5500,
+    stops: new Map(),
+    results: []
+  };
+  emitRoom(room);
+
+  setTimeout(() => {
+    if (!rooms.has(room.code) || !room.game || room.game.name !== 'Stoppa på 10.00') return;
+    room.game.status = 'running';
+    emitRoom(room);
+  }, 3500);
+
+  room.game.finishTimer = setTimeout(() => finishTen(room), 18500);
+  return true;
+}
 
 io.on('connection', socket => {
   socket.on('host:create', (_, reply = () => {}) => {
     const roomCode = code();
-    const room = { code: roomCode, hostId: socket.id, phase: 'lobby', players: [], voteOptions: [], votes: new Map() };
-    rooms.set(roomCode, room); socket.join(roomCode); socket.data.roomCode = roomCode; socket.data.role = 'host';
-    reply({ ok: true, room: publicRoom(room) }); emitRoom(room);
+    const room = { code: roomCode, hostId: socket.id, phase: 'lobby', players: [], voteOptions: [], votes: new Map(), selectedGame: null, game: null };
+    rooms.set(roomCode, room);
+    socket.join(roomCode);
+    socket.data.roomCode = roomCode;
+    socket.data.role = 'host';
+    reply({ ok: true, room: publicRoom(room) });
+    emitRoom(room);
   });
 
   socket.on('player:join', ({ roomCode, name }, reply = () => {}) => {
-    const key = String(roomCode || '').trim().toUpperCase(); const room = rooms.get(key);
+    const key = String(roomCode || '').trim().toUpperCase();
+    const room = rooms.get(key);
     if (!room) return reply({ ok:false, error:'Lobbyn finns inte.' });
     if (room.players.length >= 8) return reply({ ok:false, error:'Lobbyn är full.' });
+    if (!['lobby','voting','selected'].includes(room.phase)) return reply({ ok:false, error:'En runda pågår. Vänta till nästa spel.' });
+
     const cleanName = String(name || 'Spelare').trim().slice(0,18) || 'Spelare';
     const player = { id: socket.id, name: cleanName, color: colors[room.players.length], score: 0, voted: false };
-    room.players.push(player); socket.join(key); socket.data.roomCode = key; socket.data.role = 'player';
-    reply({ ok:true, player: { name:player.name, color:player.color }, room:publicRoom(room) }); emitRoom(room);
+    room.players.push(player);
+    socket.join(key);
+    socket.data.roomCode = key;
+    socket.data.role = 'player';
+    reply({ ok:true, player: { name:player.name, color:player.color }, room:publicRoom(room) });
+    emitRoom(room);
   });
 
   socket.on('host:startVote', (_, reply = () => {}) => {
-    const room = rooms.get(socket.data.roomCode); if (!room || room.hostId !== socket.id) return;
-    room.phase = 'voting'; room.votes.clear(); room.players.forEach(p => p.voted = false);
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || room.hostId !== socket.id || !room.players.length) return reply({ok:false});
+    room.phase = 'voting';
+    room.game = null;
+    room.selectedGame = null;
+    room.votes.clear();
+    room.players.forEach(p => p.voted = false);
     room.voteOptions = [...games].sort(() => Math.random() - .5).slice(0,3);
-    emitRoom(room); reply({ok:true});
+    emitRoom(room);
+    reply({ok:true});
   });
 
   socket.on('player:vote', ({ game }, reply = () => {}) => {
-    const room = rooms.get(socket.data.roomCode); const player = room && findPlayer(room, socket.id);
+    const room = rooms.get(socket.data.roomCode);
+    const player = room && findPlayer(room, socket.id);
     if (!room || !player || room.phase !== 'voting' || !room.voteOptions.includes(game)) return;
-    room.votes.set(socket.id, game); player.voted = true; emitRoom(room); reply({ok:true});
+    room.votes.set(socket.id, game);
+    player.voted = true;
+    emitRoom(room);
+    reply({ok:true});
+
     if (room.players.length && room.votes.size === room.players.length) {
-      const counts = Object.fromEntries(room.voteOptions.map(g => [g,0])); for (const vote of room.votes.values()) counts[vote]++;
-      const max = Math.max(...Object.values(counts)); const tied = room.voteOptions.filter(g => counts[g] === max);
-      const winner = tied[randomInt(tied.length)]; room.phase = 'selected'; io.to(room.code).emit('vote:result', { winner, counts }); emitRoom(room);
+      const counts = Object.fromEntries(room.voteOptions.map(g => [g,0]));
+      for (const vote of room.votes.values()) counts[vote]++;
+      const max = Math.max(...Object.values(counts));
+      const tied = room.voteOptions.filter(g => counts[g] === max);
+      const winner = tied[randomInt(tied.length)];
+      room.selectedGame = winner;
+      room.phase = 'selected';
+      io.to(room.code).emit('vote:result', { winner, counts });
+      emitRoom(room);
     }
   });
 
+  socket.on('host:startSelected', (_, reply = () => {}) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || room.hostId !== socket.id) return reply({ok:false});
+    if (room.selectedGame !== 'Stoppa på 10.00') return reply({ok:false, error:'Det spelet är inte byggt ännu.'});
+    reply({ok:startTen(room)});
+  });
+
+  socket.on('host:startTen', (_, reply = () => {}) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || room.hostId !== socket.id) return reply({ok:false});
+    reply({ok:startTen(room)});
+  });
+
+  socket.on('player:stopTen', (_, reply = () => {}) => {
+    const room = rooms.get(socket.data.roomCode);
+    const player = room && findPlayer(room, socket.id);
+    if (!room || !player || room.phase !== 'game' || !room.game || room.game.name !== 'Stoppa på 10.00') return reply({ok:false});
+    if (room.game.stops.has(socket.id)) return reply({ok:false});
+    const elapsed = Date.now() - room.game.startsAt;
+    if (elapsed < 0) return reply({ok:false, error:'För tidigt!'});
+    room.game.stops.set(socket.id, Math.min(elapsed, 15000));
+    reply({ok:true});
+    emitRoom(room);
+    if (room.game.stops.size === room.players.length) finishTen(room);
+  });
+
   socket.on('disconnect', () => {
-    const room = rooms.get(socket.data.roomCode); if (!room) return;
-    if (room.hostId === socket.id) { io.to(room.code).emit('room:closed'); rooms.delete(room.code); return; }
-    room.players = room.players.filter(p => p.id !== socket.id); room.votes.delete(socket.id); emitRoom(room);
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return;
+    if (room.hostId === socket.id) {
+      if (room.game?.finishTimer) clearTimeout(room.game.finishTimer);
+      io.to(room.code).emit('room:closed');
+      rooms.delete(room.code);
+      return;
+    }
+    room.players = room.players.filter(p => p.id !== socket.id);
+    room.votes.delete(socket.id);
+    room.game?.stops?.delete(socket.id);
+    if (room.phase === 'game' && room.players.length && room.game?.stops.size === room.players.length) finishTen(room);
+    else emitRoom(room);
   });
 });
 
