@@ -1,15 +1,6 @@
 (()=>{
   const SAFE_PHASES=new Set(['lobby','voting','selected','choosing','results']);
-  function addExit(){
-    if(typeof role==='undefined'||role!=='player'||typeof currentRoom==='undefined'||!currentRoom||!SAFE_PHASES.has(currentRoom.phase))return;
-    if(document.querySelector('#playerExitGame'))return;
-    const section=document.querySelector('#app > section');
-    if(!section)return;
-    const b=document.createElement('button');
-    b.id='playerExitGame';b.className='dangerButton playerExitButton';b.textContent='AVSLUTA TILL STARTSIDAN';
-    b.onclick=()=>{if(!confirm('Lämna matchen och gå till startsidan?'))return;socket.emit('player:leave',{},()=>{try{localStorage.removeItem('partybox.session.v1')}catch{} location.reload()})};
-    section.appendChild(b);
-  }
-  new MutationObserver(()=>queueMicrotask(addExit)).observe(document.querySelector('#app'),{childList:true,subtree:true});
-  setInterval(addExit,500);addExit();
+  function decorateWaiting(){if(typeof role==='undefined'||role!=='player'||typeof currentRoom==='undefined'||!currentRoom||!['selected','choosing'].includes(currentRoom.phase))return;const section=document.querySelector('#app > section');if(!section)return;section.classList.add('hostWaitingPhone');const status=section.querySelector('.status');if(status)status.textContent='VÄNTAR PÅ SPELLEDARENS KOMMANDO!'}
+  function addExit(){decorateWaiting();if(typeof role==='undefined'||role!=='player'||typeof currentRoom==='undefined'||!currentRoom||!SAFE_PHASES.has(currentRoom.phase))return;if(document.querySelector('#playerExitGame'))return;const section=document.querySelector('#app > section');if(!section)return;const b=document.createElement('button');b.id='playerExitGame';b.className='dangerButton playerExitButton';b.textContent='AVSLUTA TILL STARTSIDAN';b.onclick=()=>{if(!confirm('Lämna matchen och gå till startsidan?'))return;let done=false;const go=()=>{if(done)return;done=true;try{localStorage.removeItem('partybox.session.v1')}catch{}location.reload()};socket.emit('player:leave',{},go);setTimeout(go,700)};section.appendChild(b)}
+  new MutationObserver(()=>queueMicrotask(addExit)).observe(document.querySelector('#app'),{childList:true,subtree:true});setInterval(addExit,500);addExit();
 })();
