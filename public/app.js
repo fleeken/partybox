@@ -1,10 +1,64 @@
-const socket=io();const app=document.querySelector('#app');let role=null,me=null,currentRoom=null;
+const socket=io();const app=document.querySelector('#app');let role=null,me=null,currentRoom=null,gameTimer=null;
 const esc=s=>String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 document.querySelector('#join').onclick=()=>document.querySelector('#joinForm').classList.toggle('hidden');
 document.querySelector('#host').onclick=()=>socket.emit('host:create',{},r=>{if(r.ok){role='host';currentRoom=r.room;render()}});
 document.querySelector('#joinNow').onclick=()=>{const roomCode=document.querySelector('#code').value,name=document.querySelector('#name').value;socket.emit('player:join',{roomCode,name},r=>{if(!r.ok)return document.querySelector('#error').textContent=r.error;role='player';me=r.player;currentRoom=r.room;render()})};
-socket.on('room:update',room=>{currentRoom=room;if(role)render()});socket.on('room:closed',()=>{alert('Värden stängde lobbyn.');location.reload()});
-socket.on('vote:result',({winner})=>{if(role==='host')app.innerHTML=`<section class="home"><div class="logo">NÄSTA SPEL</div><div class="code">${esc(winner)}</div><p>Gör er redo!</p></section>`;else app.innerHTML=`<section class="phone"><h1>NÄSTA SPEL</h1><h2>${esc(winner)}</h2><p class="status">Titta på TV:n 👀</p></section>`});
-function render(){if(!currentRoom)return;if(role==='host')renderHost();else renderPhone()}
-function renderHost(){const players=currentRoom.players.map(p=>`<div class="player" style="--c:${p.color}"><div class="dot"></div>${esc(p.name)}${currentRoom.phase==='voting'?`<div class="status">${p.voted?'✓ RÖSTAT':'VÄLJER...'}</div>`:''}</div>`).join('');app.innerHTML=`<section class="lobby"><div class="top"><div class="logo">PARTY<span>BOX</span></div><div class="code">${currentRoom.code}</div><div class="status">Öppna sidan på mobilen och skriv koden</div></div><div class="players">${players||'<p class="status">Väntar på spelare…</p>'}</div><div class="hostbar">${currentRoom.phase==='lobby'?'<button id="startVote">TESTA SPELOMRÖSTNING</button>':`<h2>VÄLJ NÄSTA SPEL</h2><p class="status">${currentRoom.voteOptions.map(esc).join(' • ')}</p>`}</div></section>`;document.querySelector('#startVote')?.addEventListener('click',()=>socket.emit('host:startVote',{}))}
-function renderPhone(){const voting=currentRoom.phase==='voting';app.innerHTML=`<section class="phone" style="--c:${me.color}"><div class="badge"></div><h1>${esc(me.name)}</h1><p class="status">Lobby ${currentRoom.code}</p>${voting?`<h2>VÄLJ NÄSTA SPEL</h2><div class="votegrid">${currentRoom.voteOptions.map(g=>`<button class="vote" data-game="${esc(g)}">${esc(g)}</button>`).join('')}</div>`:'<h2>DU ÄR MED!</h2><p class="status">Vänta på TV:n 🎮</p>'}</section>`;document.querySelectorAll('.vote').forEach(b=>b.onclick=()=>socket.emit('player:vote',{game:b.dataset.game},r=>{if(r.ok){document.querySelectorAll('.vote').forEach(x=>x.disabled=true);b.classList.add('selected')}}))}
+socket.on('room:update',room=>{currentRoom=room;if(role)render()});
+socket.on('room:closed',()=>{alert('Värden stängde lobbyn.');location.reload()});
+socket.on('vote:result',()=>{});
+
+function render(){clearInterval(gameTimer);gameTimer=null;if(!currentRoom)return;if(role==='host')renderHost();else renderPhone()}
+
+function renderHost(){
+  if(currentRoom.phase==='game'&&currentRoom.game?.name==='Stoppa på 10.00')return renderTenHost();
+  if(currentRoom.phase==='results'&&currentRoom.game?.name==='Stoppa på 10.00')return renderTenResults();
+  if(currentRoom.phase==='selected')return renderSelectedHost();
+  const players=currentRoom.players.map(p=>`<div class="player" style="--c:${p.color}"><div class="dot"></div>${esc(p.name)}<div class="score">${p.score} p</div>${currentRoom.phase==='voting'?`<div class="status">${p.voted?'✓ RÖSTAT':'VÄLJER...'}</div>`:''}</div>`).join('');
+  app.innerHTML=`<section class="lobby"><div class="top"><div class="logo">PARTY<span>BOX</span></div><div class="code">${currentRoom.code}</div><div class="status">Öppna sidan på mobilen och skriv koden</div></div><div class="players">${players||'<p class="status">Väntar på spelare…</p>'}</div><div class="hostbar">${currentRoom.phase==='lobby'?'<div class="hostbuttons"><button id="startTen">SPELA STOPPA 10.00</button><button id="startVote" class="secondary">RÖSTA OM SPEL</button></div>':`<h2>VÄLJ NÄSTA SPEL</h2><p class="status">${currentRoom.voteOptions.map(esc).join(' • ')}</p>`}</div></section>`;
+  document.querySelector('#startVote')?.addEventListener('click',()=>socket.emit('host:startVote',{},r=>{if(!r.ok)alert('Minst en spelare måste vara med.')}));
+  document.querySelector('#startTen')?.addEventListener('click',()=>socket.emit('host:startTen',{},r=>{if(!r.ok)alert('Minst en spelare måste vara med.')}));
+}
+
+function renderSelectedHost(){
+  const playable=currentRoom.selectedGame==='Stoppa på 10.00';
+  app.innerHTML=`<section class="home"><div class="logo">NÄSTA SPEL</div><div class="gameTitle">${esc(currentRoom.selectedGame)}</div><p>${playable?'Redo att köra!':'Det spelet kommer snart.'}</p>${playable?'<button id="startSelected">STARTA SPELET</button>':'<button id="backVote">RÖSTA IGEN</button>'}</section>`;
+  document.querySelector('#startSelected')?.addEventListener('click',()=>socket.emit('host:startSelected',{}));
+  document.querySelector('#backVote')?.addEventListener('click',()=>socket.emit('host:startVote',{}));
+}
+
+function renderTenHost(){
+  const g=currentRoom.game;
+  app.innerHTML=`<section class="game ten"><div class="gameHeader"><div>STOPPA PÅ</div><strong>10.00</strong></div><div id="tenClock" class="tenClock">3</div><div class="status" id="tenStatus">Gör er redo...</div><div class="miniPlayers">${currentRoom.players.map(p=>`<div class="miniPlayer" style="--c:${p.color}"><span></span>${esc(p.name)}<b>${p.score} p</b></div>`).join('')}</div></section>`;
+  const clock=document.querySelector('#tenClock'),status=document.querySelector('#tenStatus');
+  const tick=()=>{const now=Date.now();const until=g.startsAt-now;if(until>0){clock.textContent=Math.ceil(until/1000);status.textContent='Gör er redo...';return;}const elapsed=now-g.startsAt;if(now<=g.revealUntil){clock.textContent=(elapsed/1000).toFixed(2);status.textContent='Tiden har startat!';}else{clock.textContent='???';status.textContent=`${g.stoppedCount}/${currentRoom.players.length} har stoppat`;}};
+  tick();gameTimer=setInterval(tick,50);
+}
+
+function renderTenResults(){
+  const rows=currentRoom.game.results.map((r,i)=>`<div class="resultRow"><div class="place">${i+1}</div><div class="resultName"><span style="background:${r.color}"></span>${esc(r.name)}</div><div class="resultTime">${(r.elapsed/1000).toFixed(3)} s</div><div class="resultPts">+${r.points}</div></div>`).join('');
+  app.innerHTML=`<section class="results"><h1>RESULTAT</h1><p class="status">Målet var exakt 10.000 sekunder</p><div class="resultList">${rows}</div><button id="nextVote">VÄLJ NÄSTA SPEL</button></section>`;
+  document.querySelector('#nextVote').onclick=()=>socket.emit('host:startVote',{});
+}
+
+function renderPhone(){
+  if(currentRoom.phase==='game'&&currentRoom.game?.name==='Stoppa på 10.00')return renderTenPhone();
+  if(currentRoom.phase==='results'&&currentRoom.game?.name==='Stoppa på 10.00')return renderTenPhoneResults();
+  if(currentRoom.phase==='selected')return app.innerHTML=`<section class="phone" style="--c:${me.color}"><div class="badge"></div><h1>${esc(currentRoom.selectedGame)}</h1><p class="status">Titta på TV:n 👀</p></section>`;
+  const voting=currentRoom.phase==='voting';
+  app.innerHTML=`<section class="phone" style="--c:${me.color}"><div class="badge"></div><h1>${esc(me.name)}</h1><p class="status">Lobby ${currentRoom.code}</p>${voting?`<h2>VÄLJ NÄSTA SPEL</h2><div class="votegrid">${currentRoom.voteOptions.map(g=>`<button class="vote" data-game="${esc(g)}">${esc(g)}</button>`).join('')}</div>`:'<h2>DU ÄR MED!</h2><p class="status">Vänta på TV:n 🎮</p>'}</section>`;
+  document.querySelectorAll('.vote').forEach(b=>b.onclick=()=>socket.emit('player:vote',{game:b.dataset.game},r=>{if(r.ok){document.querySelectorAll('.vote').forEach(x=>x.disabled=true);b.classList.add('selected')}}));
+}
+
+function renderTenPhone(){
+  const g=currentRoom.game;
+  app.innerHTML=`<section class="phone tenPhone" style="--c:${me.color}"><div class="badge"></div><h1>STOPPA PÅ 10.00</h1><div id="phoneCountdown" class="phoneCountdown">3</div><button id="stopTen" class="stopButton" disabled>STOPP!</button><p id="phoneStatus" class="status">Gör dig redo...</p></section>`;
+  const btn=document.querySelector('#stopTen'),count=document.querySelector('#phoneCountdown'),status=document.querySelector('#phoneStatus');let stopped=false;
+  const tick=()=>{const now=Date.now();const until=g.startsAt-now;if(until>0){count.textContent=Math.ceil(until/1000);btn.disabled=true;return;}count.textContent='KÖR!';if(!stopped)btn.disabled=false;if(now>g.revealUntil)status.textContent='Räkna i huvudet...';else status.textContent='Tiden går!';};
+  tick();gameTimer=setInterval(tick,50);
+  btn.onclick=()=>{if(stopped)return;socket.emit('player:stopTen',{},r=>{if(r.ok){stopped=true;btn.disabled=true;btn.textContent='STOPPAD ✓';status.textContent='Titta på TV:n!';}else if(r.error){status.textContent=r.error;}})};
+}
+
+function renderTenPhoneResults(){
+  const result=currentRoom.game.results.find(r=>r.name===me.name);
+  app.innerHTML=`<section class="phone" style="--c:${me.color}"><div class="badge"></div><h1>RESULTAT</h1>${result?`<div class="myTime">${(result.elapsed/1000).toFixed(3)} s</div><h2>+${result.points} poäng</h2>`:''}<p class="status">Titta på TV:n för hela resultatet.</p></section>`;
+}
