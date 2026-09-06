@@ -6,16 +6,19 @@
     const g=typeof currentRoom!=='undefined'?currentRoom?.game:null;
     if(!g||g.name!=='Quiz Battle'||g.status!=='questionResults'){clearOverlay();return}
     const root=document.querySelector('#app > section');if(!root)return;
-    const key=`${g.questionIndex}-${g.resultUntil}`;
+    const finalQuestion=g.questionIndex>=g.questionTotal;
+    const key=`${g.questionIndex}-${g.resultUntil}-${finalQuestion?'final':'between'}`;
     let overlay=document.querySelector('.quizBetweenOverlay');
     if(!overlay||lastKey!==key){
       clearOverlay();
       const sorted=[...(currentRoom.players||[])].sort((a,b)=>(b.roundScore||0)-(a.roundScore||0));
       overlay=document.createElement('div');overlay.className='quizBetweenOverlay';
-      overlay.innerHTML=`<div class="quizBetweenCard"><div class="quizBetweenTitle">RESULTAT FRÅGA ${g.questionIndex}/${g.questionTotal}</div><div class="quizBetweenSub">POÄNGSTÄLLNING</div><div class="quizBetweenList">${sorted.map((p,i)=>`<div class="quizBetweenRow"><span class="quizPlace">${i+1}</span><span class="quizName">${escQ(p.avatar)} ${escQ(p.name)}</span><b>${Math.round(p.roundScore||0)} p</b></div>`).join('')}</div><div class="quizNextIn" id="quizNextIn"></div></div>`;
+      overlay.innerHTML=`<div class="quizBetweenCard"><div class="quizBetweenTitle">${finalQuestion?'SLUTRESULTAT':`RESULTAT FRÅGA ${g.questionIndex}/${g.questionTotal}`}</div><div class="quizBetweenSub">${finalQuestion?'QUIZ BATTLE':'POÄNGSTÄLLNING'}</div><div class="quizBetweenList">${sorted.map((p,i)=>`<div class="quizBetweenRow"><span class="quizPlace">${i+1}</span><span class="quizName">${escQ(p.avatar)} ${escQ(p.name)}</span><b>${Math.round(p.roundScore||0)} p</b></div>`).join('')}</div>${finalQuestion?'':'<div class="quizNextIn" id="quizNextIn"></div>'}</div>`;
       root.appendChild(overlay);lastKey=key;
-      const update=()=>{const live=typeof currentRoom!=='undefined'?currentRoom?.game:null;if(!live||live.status!=='questionResults')return;const left=Math.max(0,Math.ceil(((live.resultUntil||Date.now())-Date.now())/1000));const el=document.querySelector('#quizNextIn');if(el)el.textContent=live.questionIndex>=live.questionTotal?`SLUTRESULTAT OM ${left}`:`FRÅGA ${live.questionIndex+1}/${live.questionTotal} OM ${left}`};
-      update();tick=setInterval(update,200);
+      if(!finalQuestion){
+        const update=()=>{const live=typeof currentRoom!=='undefined'?currentRoom?.game:null;if(!live||live.status!=='questionResults')return;const left=Math.max(0,Math.ceil(((live.resultUntil||Date.now())-Date.now())/1000));const el=document.querySelector('#quizNextIn');if(el)el.textContent=`FRÅGA ${live.questionIndex+1}/${live.questionTotal} OM ${left}`};
+        update();tick=setInterval(update,200);
+      }
     }
   }
   const style=document.createElement('style');
